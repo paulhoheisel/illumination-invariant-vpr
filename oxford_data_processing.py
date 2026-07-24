@@ -847,7 +847,6 @@ class ThresholdPairDataset(Dataset):
                             break
                         neighbors = tree2.query_ball_point(t1s[i], r=d)
                         if not neighbors:
-                            print("keine neighbors gefunden")
                             continue
                         #print(f"{len(neighbors)} neighbors gefunden")
                         rng.shuffle(neighbors)

@@ -26,7 +26,6 @@ class LMCLoss(nn.Module):
         if subroute_class_indices is not None:
             # --- HIER IST DER KNIFF ---
             # Wir schneiden uns NUR die Spalten aus W heraus, die zur Subroute gehören
-            print("Der korrekte forward pass wurde gewaehlt")
             W_sub = self.W[:, subroute_class_indices]
             print(np.shape(W_sub))
             W_norm = F.normalize(W_sub, p=2, dim=0)
