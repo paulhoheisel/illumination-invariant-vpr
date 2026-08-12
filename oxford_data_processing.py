@@ -707,8 +707,7 @@ def visualize_cluster_centers_2d(cluster_centers_dict_flat, day_dict_flat, scene
         
         # Add cluster labels on the plot
         for i, cluster_id in enumerate(cluster_ids):
-            ax.annotate(f'{cluster_id}', 
-                       xy=(x_coords[i], y_coords[i]), 
+            ax.annotate(xy=(x_coords[i], y_coords[i]), # f'{cluster_id}',
                        xytext=(3, 3), 
                        textcoords='offset points',
                        fontsize=7,
