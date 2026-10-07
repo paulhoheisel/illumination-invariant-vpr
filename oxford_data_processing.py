@@ -8,7 +8,7 @@ import torch.nn as nn
 from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from matplotlib.cm import get_cmap
+from matplotlib import cm
 import os
 from pathlib import Path
 from torch.utils.data import Dataset, DataLoader
@@ -699,7 +699,7 @@ def visualize_cluster_centers_2d(cluster_centers_dict_flat, day_dict_flat, scene
                           for cid in cluster_ids]
         
         # Use a colormap: light colors for low IDs, dark colors for high IDs
-        cmap = get_cmap('viridis')  # Light to dark
+        cmap = cm.get_cmap('viridis')  # Light to dark
         colors = [cmap(norm_id) for norm_id in normalized_ids]
         
         # Scatter plot
@@ -770,17 +770,30 @@ def _rotation_angle_deg(q1, q2):
 
 
 class ThresholdPairDataset(Dataset):
-    def __init__(self, dist_thresholds, angle_thresholds, poses_dict_1, poses_dict_2, image_names_1, image_names_2,
-                 path_map_1, path_map_2, sample_size, transform=None, build_pairs=True):
+    def __init__(self, dist_thresholds=None, angle_thresholds=None, poses_dict_1=None, poses_dict_2=None,
+                 image_names_1=None, image_names_2=None, path_map_1=None, path_map_2=None,
+                 sample_size=1, transform=None, build_pairs=True, thresholds=None):
         """
         Erzeugt Bildpaare pro Threshold-Gruppe, wobei jedes Paar zufällig aus allen
         Kandidaten gezogen wird, die zwischen dem aktuellen und dem vorherigen threshold liegen.
 
         Jedes Paar wird mit einem Threshold-Label annotiert, das für das Training und
         die spätere Zuordnung über den DataLoader geeignet ist.
+
+        Supports both the original API (`dist_thresholds`, `angle_thresholds`) and the
+        simpler unit-test API (`thresholds=[(dist, angle), ...]`).
         """
-        self.dist_thresholds = np.array(dist_thresholds)
-        self.angle_thresholds = np.array(angle_thresholds)
+        if thresholds is not None:
+            if dist_thresholds is not None or angle_thresholds is not None:
+                raise TypeError("Use either 'thresholds' or the legacy 'dist_thresholds'/'angle_thresholds' arguments, not both.")
+            self.thresholds = list(thresholds)
+            self.dist_thresholds = np.array([d for d, _ in self.thresholds], dtype=float)
+            self.angle_thresholds = np.array([a for _, a in self.thresholds], dtype=float)
+        else:
+            self.thresholds = None
+            self.dist_thresholds = np.array(dist_thresholds, dtype=float)
+            self.angle_thresholds = np.array(angle_thresholds, dtype=float)
+
         self.poses_dict_1 = poses_dict_1
         self.poses_dict_2 = poses_dict_2
         self.image_names_1 = list(image_names_1)
@@ -823,101 +836,111 @@ class ThresholdPairDataset(Dataset):
             tree2 = None
 
         label_idx = 0
-        for ind_d in range(len(self.dist_thresholds)):
-            for ind_a in range(len(self.angle_thresholds)):
-                d, a = self.dist_thresholds[ind_d], self.angle_thresholds[ind_a]
+        threshold_pairs = list(self.thresholds) if self.thresholds is not None else [
+            (self.dist_thresholds[ind_d], self.angle_thresholds[ind_a])
+            for ind_d in range(len(self.dist_thresholds))
+            for ind_a in range(len(self.angle_thresholds))
+        ]
+
+        for threshold_index, threshold in enumerate(threshold_pairs):
+            d, a = threshold
+            if self.thresholds is not None:
+                d_previous = 0.0
+                a_previous = 0.0
+            else:
+                ind_d, ind_a = divmod(threshold_index, len(self.angle_thresholds))
                 if ind_d > 0:
-                    d_previous = self.dist_thresholds[ind_d-1]
-                else: d_previous = 0
+                    d_previous = self.dist_thresholds[ind_d - 1]
+                else:
+                    d_previous = 0.0
                 if ind_a > 0:
-                    a_previous = self.angle_thresholds[ind_a-1]
-                else: a_previous = 0
-                collected = []
-                seen = set()
+                    a_previous = self.angle_thresholds[ind_a - 1]
+                else:
+                    a_previous = 0.0
 
-                # Randomize scanning order of first set to avoid spatial bias
-                indices1 = list(range(len(names1)))
-                rng.shuffle(indices1)
+            collected = []
+            seen = set()
 
-                # Phase 1: spatial neighbor based search
-                if tree2 is not None:
-                    for i in indices1:
-                        if len(collected) >= self.sample_size:
-                            break
-                        neighbors = tree2.query_ball_point(t1s[i], r=d)
-                        if not neighbors:
+            # Randomize scanning order of first set to avoid spatial bias
+            indices1 = list(range(len(names1)))
+            rng.shuffle(indices1)
+
+            # Phase 1: spatial neighbor based search
+            if tree2 is not None:
+                for i in indices1:
+                    if len(collected) >= self.sample_size:
+                        break
+                    neighbors = tree2.query_ball_point(t1s[i], r=d)
+                    if not neighbors:
+                        continue
+                    rng.shuffle(neighbors)
+                    for j in neighbors:
+                        key = (names1[i], names2[j])
+                        if key in seen:
                             continue
-                        #print(f"{len(neighbors)} neighbors gefunden")
-                        rng.shuffle(neighbors)
-                        for j in neighbors:
-                            key = (names1[i], names2[j])
-                            if key in seen:
+                        dist = float(np.linalg.norm(t2s[j] - t1s[i]))
+                        angle = float(_rotation_angle_deg(q1s[i], q2s[j]))
+                        if d_previous <= dist <= d and a_previous <= angle <= a:
+                            if dist < eps and angle < eps:
                                 continue
-                            dist = float(np.linalg.norm(t2s[j] - t1s[i]))
-                            angle = float(_rotation_angle_deg(q1s[i], q2s[j]))
-                            if d_previous <= dist <= d and a_previous <= angle <= a:
-                                if dist < eps and angle < eps:
-                                    continue
-                                pair = {
-                                    'img_name_1': names1[i],
-                                    'img_name_2': names2[j],
-                                    'path_1': self.path_map_1[names1[i]],
-                                    'path_2': self.path_map_2[names2[j]],
-                                    'threshold': (d, a),
-                                    'threshold_label': label_idx,
-                                    'distance': dist,
-                                    'angle': angle,
-                                }
-                                #print("added pair via tree")
-                                collected.append(pair)
-                                seen.add(key)
-                                break
-                    label_idx += 1
+                            pair = {
+                                'img_name_1': names1[i],
+                                'img_name_2': names2[j],
+                                'path_1': self.path_map_1[names1[i]],
+                                'path_2': self.path_map_2[names2[j]],
+                                'threshold': (d, a),
+                                'threshold_label': label_idx,
+                                'distance': dist,
+                                'angle': angle,
+                            }
+                            collected.append(pair)
+                            seen.add(key)
+                            break
 
-                # Phase 2: fallback random sampling until we have enough or give up
-                attempts = 0
-                if len(collected) < self.sample_size:
-                    print(f"fallback...after finding only {len(collected)} pairs.")
-                max_attempts = max(1000, self.sample_size * 50)
-                while len(collected) < self.sample_size and attempts < max_attempts:
-                    i = rng.randrange(len(names1))
-                    j = rng.randrange(len(names2))
-                    key = (names1[i], names2[j])
-                    attempts += 1
-                    if key in seen:
-                        continue
-                    dist = float(np.linalg.norm(t2s[j] - t1s[i]))
-                    if dist > d:
-                        continue
-                    angle = float(_rotation_angle_deg(q1s[i], q2s[j]))
-                    if angle > a:
-                        continue
-                    if dist <= d_previous or angle <= a_previous:
-                        continue
-                    if dist < eps and angle < eps:
-                        continue
-                    pair = {
-                        'img_name_1': names1[i],
-                        'img_name_2': names2[j],
-                        'path_1': self.path_map_1[names1[i]],
-                        'path_2': self.path_map_2[names2[j]],
-                        'threshold': (d, a),
-                        'threshold_label': label_idx,
-                        'distance': dist,
-                        'angle': angle,
-                    }
-                    collected.append(pair)
-                    seen.add(key)
+            # Phase 2: fallback random sampling until we have enough or give up
+            attempts = 0
+            if len(collected) < self.sample_size:
+                print(f"fallback...after finding only {len(collected)} pairs.")
+            max_attempts = max(1000, self.sample_size * 50)
+            while len(collected) < self.sample_size and attempts < max_attempts:
+                i = rng.randrange(len(names1))
+                j = rng.randrange(len(names2))
+                key = (names1[i], names2[j])
+                attempts += 1
+                if key in seen:
+                    continue
+                dist = float(np.linalg.norm(t2s[j] - t1s[i]))
+                if dist > d:
+                    continue
+                angle = float(_rotation_angle_deg(q1s[i], q2s[j]))
+                if angle > a:
+                    continue
+                if dist <= d_previous or angle <= a_previous:
+                    continue
+                if dist < eps and angle < eps:
+                    continue
+                pair = {
+                    'img_name_1': names1[i],
+                    'img_name_2': names2[j],
+                    'path_1': self.path_map_1[names1[i]],
+                    'path_2': self.path_map_2[names2[j]],
+                    'threshold': (d, a),
+                    'threshold_label': label_idx,
+                    'distance': dist,
+                    'angle': angle,
+                }
+                collected.append(pair)
+                seen.add(key)
 
-                # Save
-                self.pairs_by_threshold[(d, a)] = collected
-                for pair in collected:
-                    self.pairs.append(pair)
+            self.pairs_by_threshold[(d, a)] = collected
+            for pair in collected:
+                self.pairs.append(pair)
 
-                self.threshold_labels[(d, a)] = label_idx
-                print(f"  threshold {label_idx}: {(d, a)} -> created {len(collected)} pairs")
-                if len(collected) < self.sample_size:
-                    print(f"  warning: threshold {(d, a)} did not reach sample_size ({len(collected)} < {self.sample_size})")
+            self.threshold_labels[(d, a)] = label_idx
+            print(f"  threshold {label_idx}: {(d, a)} -> created {len(collected)} pairs")
+            if len(collected) < self.sample_size:
+                print(f"  warning: threshold {(d, a)} did not reach sample_size ({len(collected)} < {self.sample_size})")
+            label_idx += 1
 
         return self.pairs
 
