@@ -1,6 +1,6 @@
-# Illumination-Invariant Visual Place Recognition
+# Illumination-Invariant Visual Place Recognition - Individual Research Project completed within the COLABS program of the Tohoku University (Sendai, Japan)
 
-This project explores a core robotics and computer vision problem: how can a visual place recognition (VPR) model reliably match the same location across large illumination changes, especially from day to night?
+This project explores a core computer vision problem which is for example relevant for autonomous vehicles or robots: how can a visual place recognition (VPR) model reliably match the same location across large illumination changes, especially from day to night?
 
 I built and evaluated a research pipeline for learning illumination-invariant embeddings that remain stable when scene appearance changes dramatically. The work is designed around the real-world challenge of navigating using camera data only, where lighting variation can make traditional image descriptors fail.
 
