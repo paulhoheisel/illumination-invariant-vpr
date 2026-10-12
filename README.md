@@ -12,7 +12,7 @@ This project tackles that challenge by studying how to learn embeddings that are
 
 ## What I implemented
 
-- Pose-aware preprocessing of Oxford RobotCar data
+- Pose-aware preprocessing of Oxford Day-and-Night data
 - Night/day pair construction for cross-condition matching
 - Clustering and subroute-based label generation for structured training
 - Margin-based metric learning for class separation and retrieval robustness
